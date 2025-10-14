@@ -55,10 +55,10 @@ const api = axios.create({
 
 export const nl2sqlApi = {
   /**
-   * Send a natural language query to the API
+   * Send a natural language query to the API (bilingual support)
    */
   async query(request: NL2SQLRequest): Promise<NL2SQLResponse> {
-    const response = await api.post<NL2SQLResponse>('/api/nl2sql/query', request);
+    const response = await api.post<NL2SQLResponse>('/api/nl2sql/query/bilingual', request);
     return response.data;
   },
 
