@@ -118,6 +118,24 @@ def extract_sql(text: str) -> str:
 
     # Validate for incomplete SQL patterns
     if sql:
+        # Check for unterminated quoted strings (most common truncation error)
+        # Count single quotes - should be even
+        single_quote_count = sql.count("'")
+        if single_quote_count % 2 != 0:
+            raise ValueError(
+                "Incomplete SQL detected: Unterminated quoted string. "
+                "The query appears to be truncated. Try increasing max_new_tokens or simplifying the query."
+            )
+        
+        # Check for incomplete CASE statements
+        case_count = len(re.findall(r'\bCASE\b', sql, re.IGNORECASE))
+        end_count = len(re.findall(r'\bEND\b', sql, re.IGNORECASE))
+        if case_count > end_count:
+            raise ValueError(
+                f"Incomplete SQL detected: {case_count} CASE statement(s) but only {end_count} END statement(s). "
+                "The query appears to be truncated. Try increasing max_new_tokens or simplifying the query."
+            )
+        
         # Check for incomplete JOIN/WHERE/comparison conditions
         incomplete_patterns = [
             (r'\bON\s+[\w.]+\s*=\s*;', "Incomplete JOIN condition (ON ... =;)"),
@@ -130,6 +148,7 @@ def extract_sql(text: str) -> str:
             (r'=\s*,', "Incomplete comparison (= followed by comma)"),
             (r'=\s*(?:FROM|WHERE|GROUP|ORDER|HAVING|LIMIT)\b', "Incomplete comparison before keyword"),
             (r'GROUP\s+BY\s+[\w.,\s]+,\s*[a-z];\s*$', "Incomplete GROUP BY (ends with single letter)"),
+            (r"'\d{1,7};", "Truncated date string (ends with incomplete value like '203;)"),
         ]
         
         for pattern, error_msg in incomplete_patterns:

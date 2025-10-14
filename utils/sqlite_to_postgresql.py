@@ -283,6 +283,31 @@ def convert_sqlite_to_postgresql(sql: str) -> str:
         flags=re.IGNORECASE
     )
     
+    # Convert IFNULL(expr1, expr2) to COALESCE(expr1, expr2)
+    sql = re.sub(
+        r'\bIFNULL\s*\(\s*([^,]+)\s*,\s*([^)]+)\s*\)',
+        r'COALESCE(\1, \2)',
+        sql,
+        flags=re.IGNORECASE
+    )
+    
+    # Convert ISNULL(expr1, expr2) to COALESCE(expr1, expr2) (SQL Server style)
+    sql = re.sub(
+        r'\bISNULL\s*\(\s*([^,]+)\s*,\s*([^)]+)\s*\)',
+        r'COALESCE(\1, \2)',
+        sql,
+        flags=re.IGNORECASE
+    )
+    
+    # Convert LENGTH() to LENGTH() (PostgreSQL uses LENGTH, not LEN)
+    # This is already compatible, but let's ensure consistency
+    sql = re.sub(
+        r'\bLEN\s*\(\s*([^)]+)\s*\)',
+        r'LENGTH(\1)',
+        sql,
+        flags=re.IGNORECASE
+    )
+    
     return sql
 
 def fix_complex_date_expressions(sql: str) -> str:

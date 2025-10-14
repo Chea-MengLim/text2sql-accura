@@ -95,7 +95,3 @@ def correct_sql_parentheses(query: str) -> str:
     # If there are no issues with the parentheses, return the query as is
     return query
 
-# Test the method
-sql_query = "SELECT DISTINCT table_name FROM information_schema.tables ) AS table_count;"
-corrected_query = correct_sql_parentheses(sql_query)
-print("Corrected Query:", corrected_query)

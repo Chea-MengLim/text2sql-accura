@@ -203,13 +203,13 @@ Columns:
     Description: Business partner or customer or client key or account key.
   
   • sply_amt (NUMERIC)
-    Description: Supply price or amount before tax in KRW (South Korean Won).
+    Description: Supply amount before tax in KRW (South Korean Won).
   
   • item_tax (NUMERIC)
     Description: Additional tax amount in KRW (South Korean Won).
   
   • trsc_amt (NUMERIC)
-    Description: The total value of the transaction, calculated as Net Amount + Tax Amount in KRW (South Korean Won).
+    Description: The total value of the transaction, calculated as Supply amount + Tax amount in KRW (South Korean Won).
 
 
 ===========================================

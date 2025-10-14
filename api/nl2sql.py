@@ -22,6 +22,7 @@ from utils.sqlite_to_postgresql import (
 import uuid  
 from dotenv import load_dotenv
 import os
+from service.ai_assistant import AIAssistant
 
 load_dotenv()
 
@@ -30,6 +31,7 @@ router = APIRouter(prefix="/api/nl2sql", tags=["nl2sql"])
 
 # Initialize services
 sql_generator = SQLGenerator()
+ai_assistant = AIAssistant(model_name="llama3.1:8b")  # Using Ollama
 memory_service = ConversationMemoryService(os.getenv("MY_POSTGRESQL"))  # Add this
 
 @router.post("/query", response_model=NL2SQLResponse)
@@ -54,13 +56,30 @@ async def convert_nl_to_sql(
         
         # Step 3: Generate SQL from natural language with context
         logger.info(f"Converting question to SQL: {request.question}")
-        raw_sql_response = sql_generator.generate_sql(
+        raw_sql_response = await sql_generator.generate_sql(
             request.question,
             conversation_context  # Pass context to model
         )
 
         # Extract clean SQL from the response
-        sql_query = extract_sql(raw_sql_response)
+        try:
+            sql_query = extract_sql(raw_sql_response)
+        except ValueError as e:
+            # Handle truncated/incomplete SQL queries
+            logger.error(f"SQL extraction failed: {str(e)}")
+            error_msg = (
+                "The generated SQL query appears to be incomplete or too complex. "
+                "Please try rephrasing your question in a simpler way, or ask about a smaller time range. "
+                f"Technical details: {str(e)}"
+            )
+            return NL2SQLResponse(
+                sql_query="",
+                natural_language_answer=error_msg,
+                execution_success=False,
+                error_message=str(e),
+                chart_specification=None,
+                data=[]
+            )
 
         # Convert SQLite syntax to PostgreSQL
         # IMPORTANT: Order matters! Text date conversions must come before type casts
@@ -84,7 +103,33 @@ async def convert_nl_to_sql(
 
         print("Execution result:", execution_result)
         
-        # Step 5: Save exchange to PostgreSQL memory
+        # Step 5: Generate AI-powered natural language explanation
+        if execution_result["success"] and execution_result["data"]:
+            logger.info("Generating AI explanation...")
+            nl_explanation = await ai_assistant.explain_result(
+                user_question=request.question,
+                sql_query=sql_query,
+                result_data=execution_result["data"]
+            )
+            
+            # Step 6: Generate chart specification if applicable
+            logger.info("Checking for chart generation...")
+            chart_spec = await ai_assistant.generate_chart_spec(
+                user_question=request.question,
+                sql_query=sql_query,
+                sql_result=execution_result["data"]
+            )
+            
+            if chart_spec:
+                logger.info(f"Chart generated: {chart_spec['chart_type']}")
+            else:
+                logger.info("No chart suitable for this data")
+        else:
+            # Fallback for failed queries or empty results
+            nl_explanation = execution_result["summary"]
+            chart_spec = None
+        
+        # Step 7: Save exchange to PostgreSQL memory
         memory_service.save_exchange(
             memory=memory,
             question=request.question,
@@ -92,20 +137,24 @@ async def convert_nl_to_sql(
         )
         logger.info(f"Exchange saved to session {session_id}")
 
-        # Step 6: Prepare response
+        # Step 8: Prepare response with AI-generated content
         if execution_result["success"]:
             return NL2SQLResponse(
                 sql_query=sql_query,
-                natural_language_answer=execution_result["summary"],
+                natural_language_answer=nl_explanation,  # AI-generated explanation!
                 execution_success=True,
-                error_message=None
+                error_message=None,
+                chart_specification=chart_spec,  # Chart data if available
+                data=execution_result["data"]  # Include query results
             )
         else:
             return NL2SQLResponse(
                 sql_query=sql_query,
                 natural_language_answer=f"Query generated but execution failed: {execution_result['error']}",
                 execution_success=False,
-                error_message=execution_result["error"]
+                error_message=execution_result["error"],
+                chart_specification=None,
+                data=[]
             )
 
     except Exception as e:
@@ -142,17 +191,40 @@ async def get_conversation_count(session_id: str):
         logger.error(f"Failed to get session count: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
+@router.get("/status")
+async def get_status():
+    """Check the status of SQL generation (service mode or local fallback)"""
+    import httpx
+    
+    model_service_available = False
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            response = await client.get(f"{sql_generator.model_service_url}/health")
+            model_service_available = response.status_code == 200
+    except:
+        model_service_available = False
+    
+    return {
+        "model_service_url": sql_generator.model_service_url,
+        "model_service_available": model_service_available,
+        "current_mode": sql_generator.mode,
+        "fallback_enabled": sql_generator.use_fallback,
+        "recommendation": "Start model service for 70% GPU memory savings!" if not model_service_available else "Using model service - optimal memory usage!",
+        "start_command": "./start_model_service.sh" if not model_service_available else None
+    }
+
 @router.get("/test")
 async def test_nl2sql():
     """Test endpoint to verify NL2SQL service is working"""
     try:
         test_question = "Show me all users"
-        sql_query = sql_generator.generate_sql(test_question)
+        sql_query = await sql_generator.generate_sql(test_question)
         return {
             "status": "success",
             "test_question": test_question,
             "generated_sql": sql_query,
-            "message": "NL2SQL service is working"
+            "message": "NL2SQL service is working",
+            "mode": sql_generator.mode
         }
     except Exception as e:
         return {
