@@ -1,4 +1,3 @@
-
 import re
 
 def extract_sql(text: str) -> str:
@@ -34,8 +33,9 @@ def extract_sql(text: str) -> str:
     
     # If no code block found, try to extract SQL starting from common keywords
     if not sql:
-        # Look for SQL after "### SQL Query" or similar markers
+        # Look for SQL after "Here is the final SQL query:" or "### SQL Query"
         sql_marker_patterns = [
+            r"Here\s+is\s+the\s+(?:final\s+)?SQL\s+query\s*[:\n]+\s*(.*)",
             r"###\s*SQL\s*Query\s*[:\n]+(.*)",
             r"SQL\s*Query\s*[:\n]+(.*)",
         ]
@@ -64,6 +64,21 @@ def extract_sql(text: str) -> str:
         keyword_pos = sql_start_match.end() - len(sql_start_match.group(1))
         sql = sql[keyword_pos:]
     
+    # Remove markdown backticks around identifiers (MySQL style)
+    # Convert `table_name` to table_name
+    sql = re.sub(r'`([^`]+)`', r'\1', sql)
+    
+    # Stop at common text markers that indicate end of SQL
+    end_markers = [
+        r'\n\n(?:Explanation|Note|This query|The query|To run)',
+        r'\n\d+\.\s+\*\*',  # Numbered list with markdown
+    ]
+    for marker in end_markers:
+        match = re.search(marker, sql, re.IGNORECASE)
+        if match:
+            sql = sql[:match.start()]
+            break
+    
     # Remove anything after the last complete SQL statement
     # Handle incomplete queries (like "SELECT;")
     if sql:
@@ -73,16 +88,24 @@ def extract_sql(text: str) -> str:
             parts = sql.split(";")
             # Check if the last part (after last ;) is empty or just whitespace
             if parts[-1].strip():
-                # Last part has content, might be incomplete
-                sql = ";".join(parts[:-1]) + ";"
+                # Last part has content, might be incomplete - check if it's just a comment or text
+                last_part = parts[-1].strip()
+                if not re.match(r'^--', last_part):  # Not a comment
+                    # Might be incomplete SQL, keep it
+                    sql = ";".join(parts)
+                else:
+                    sql = ";".join(parts[:-1]) + ";"
             else:
                 sql = ";".join(parts[:-1]) + ";"
         
         # Check for obviously incomplete queries
         sql_upper = sql.upper().strip()
-        if sql_upper.endswith(("SELECT;", "FROM;", "WHERE;", "GROUP BY;", "ORDER BY;")):
-            # Query is incomplete, might need to warn
-            pass  # Keep as is, but execution will likely fail
+        if sql_upper.endswith(("SELECT;", "FROM;", "WHERE;", "GROUP BY;", "ORDER BY;", ",")):
+            # Query is incomplete
+            raise ValueError(
+                "Incomplete SQL detected: Query appears to be cut off. "
+                "The model output may have been truncated. Try increasing max_new_tokens."
+            )
     
     # normalize whitespace but preserve newlines for readability
     sql = re.sub(r"[ \t]+", " ", sql).strip()
@@ -94,6 +117,24 @@ def extract_sql(text: str) -> str:
 
     # Validate for incomplete SQL patterns
     if sql:
+        # Check for unterminated quoted strings (most common truncation error)
+        # Count single quotes - should be even
+        single_quote_count = sql.count("'")
+        if single_quote_count % 2 != 0:
+            raise ValueError(
+                "Incomplete SQL detected: Unterminated quoted string. "
+                "The query appears to be truncated. Try increasing max_new_tokens or simplifying the query."
+            )
+        
+        # Check for incomplete CASE statements
+        case_count = len(re.findall(r'\bCASE\b', sql, re.IGNORECASE))
+        end_count = len(re.findall(r'\bEND\b', sql, re.IGNORECASE))
+        if case_count > end_count:
+            raise ValueError(
+                f"Incomplete SQL detected: {case_count} CASE statement(s) but only {end_count} END statement(s). "
+                "The query appears to be truncated. Try increasing max_new_tokens or simplifying the query."
+            )
+        
         # Check for incomplete JOIN/WHERE/comparison conditions
         incomplete_patterns = [
             (r'\bON\s+[\w.]+\s*=\s*;', "Incomplete JOIN condition (ON ... =;)"),
@@ -105,6 +146,8 @@ def extract_sql(text: str) -> str:
             (r'\bJOIN\s+\w+\s+\w+\s*;', "JOIN with alias but no ON clause"),
             (r'=\s*,', "Incomplete comparison (= followed by comma)"),
             (r'=\s*(?:FROM|WHERE|GROUP|ORDER|HAVING|LIMIT)\b', "Incomplete comparison before keyword"),
+            (r'GROUP\s+BY\s+[\w.,\s]+,\s*[a-z];\s*$', "Incomplete GROUP BY (ends with single letter)"),
+            (r"'\d{1,7};", "Truncated date string (ends with incomplete value like '203;)"),
         ]
         
         for pattern, error_msg in incomplete_patterns:

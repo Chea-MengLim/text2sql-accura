@@ -163,6 +163,14 @@ def convert_sqlite_to_postgresql(sql: str) -> str:
         flags=re.IGNORECASE
     )
     
+    # NEW: Convert strftime('%Y%m', 'now') to TO_CHAR(CURRENT_DATE, 'YYYYMM')
+    sql = re.sub(
+        r"strftime\s*\(\s*['\"]%Y%m['\"]\s*,\s*['\"]now['\"]\s*\)",
+        "TO_CHAR(CURRENT_DATE, 'YYYYMM')",
+        sql,
+        flags=re.IGNORECASE
+    )
+    
     # NEW: Convert strftime('%Y', 'now') to EXTRACT(YEAR FROM CURRENT_DATE)::TEXT
     sql = re.sub(
         r"strftime\s*\(\s*['\"]%Y['\"]\s*,\s*['\"]now['\"]\s*\)",
@@ -191,6 +199,14 @@ def convert_sqlite_to_postgresql(sql: str) -> str:
     sql = re.sub(
         r"strftime\s*\(\s*['\"]%Y-%m['\"]\s*,\s*([\w.]+)\s*\)",
         r"TO_CHAR(\1, 'YYYY-MM')",
+        sql,
+        flags=re.IGNORECASE
+    )
+    
+    # NEW: Convert strftime('%Y%m', column) to TO_CHAR(column, 'YYYYMM')
+    sql = re.sub(
+        r"strftime\s*\(\s*['\"]%Y%m['\"]\s*,\s*([\w.]+)\s*\)",
+        r"TO_CHAR(\1, 'YYYYMM')",
         sql,
         flags=re.IGNORECASE
     )
@@ -267,6 +283,103 @@ def convert_sqlite_to_postgresql(sql: str) -> str:
         flags=re.IGNORECASE
     )
     
+    # Convert IFNULL(expr1, expr2) to COALESCE(expr1, expr2)
+    sql = re.sub(
+        r'\bIFNULL\s*\(\s*([^,]+)\s*,\s*([^)]+)\s*\)',
+        r'COALESCE(\1, \2)',
+        sql,
+        flags=re.IGNORECASE
+    )
+    
+    # Convert ISNULL(expr1, expr2) to COALESCE(expr1, expr2) (SQL Server style)
+    sql = re.sub(
+        r'\bISNULL\s*\(\s*([^,]+)\s*,\s*([^)]+)\s*\)',
+        r'COALESCE(\1, \2)',
+        sql,
+        flags=re.IGNORECASE
+    )
+    
+    # Convert LENGTH() to LENGTH() (PostgreSQL uses LENGTH, not LEN)
+    # This is already compatible, but let's ensure consistency
+    sql = re.sub(
+        r'\bLEN\s*\(\s*([^)]+)\s*\)',
+        r'LENGTH(\1)',
+        sql,
+        flags=re.IGNORECASE
+    )
+    
+    return sql
+
+def fix_complex_date_expressions(sql: str) -> str:
+    """
+    Fixes complex SQLite DATE expressions that weren't caught by basic patterns.
+    Handles patterns like: DATE('now', 'start of month', '+1 month', '-1 day')
+    """
+    if not sql:
+        return sql
+    
+    # Pattern: DATE('now', 'start of month', '+N month', '-N day')
+    # Example: DATE('now', 'start of month', '+1 month', '-1 day') -> End of current month
+    def replace_end_of_month_offset(match):
+        month_offset = int(match.group(1)) if match.group(1) else 0
+        day_offset = int(match.group(2)) if match.group(2) else 0
+        
+        if month_offset == 1 and day_offset == 1:
+            # End of current month: start of next month - 1 day
+            return "(DATE_TRUNC('month', CURRENT_DATE) + INTERVAL '1 month' - INTERVAL '1 day')"
+        else:
+            # Generic version
+            return f"(DATE_TRUNC('month', CURRENT_DATE) + INTERVAL '{month_offset} month' - INTERVAL '{day_offset} day')"
+    
+    sql = re.sub(
+        r"DATE\s*\(\s*['\"]now['\"]\s*,\s*['\"]start of month['\"]\s*,\s*['\"]\+(\d+)\s*months?['\"]\s*,\s*['\"]-([\d]+)\s*days?['\"]\s*\)",
+        replace_end_of_month_offset,
+        sql,
+        flags=re.IGNORECASE
+    )
+    
+    # Pattern: Only convert DATE(...) if it contains SQLite-specific keywords
+    # This is safer than converting ALL DATE() calls
+    # Only convert if it has 'now', '+', or '-' which are SQLite-specific
+    sql = re.sub(
+        r"DATE\s*\(\s*['\"]now['\"][^)]*\)",
+        "CURRENT_DATE",
+        sql,
+        flags=re.IGNORECASE
+    )
+    
+    return sql
+
+def fix_date_trunc_string_literals(sql: str) -> str:
+    """
+    Fixes DATE_TRUNC calls where the second parameter is a string literal.
+    PostgreSQL's DATE_TRUNC requires the second parameter to be a DATE/TIMESTAMP, not a string.
+    
+    Example:
+        DATE_TRUNC('month', '2023-01-01')
+        becomes:
+        DATE_TRUNC('month', '2023-01-01'::DATE)
+    """
+    if not sql:
+        return sql
+    
+    # Pattern: DATE_TRUNC('unit', 'date-string')
+    # Match string literals in the second parameter position
+    def replace_date_trunc(match):
+        unit = match.group(1)  # 'year', 'month', 'day', etc.
+        date_str = match.group(2)  # The date string
+        
+        # Add ::DATE cast to the date string
+        return f"DATE_TRUNC('{unit}', '{date_str}'::DATE)"
+    
+    # Pattern matches: DATE_TRUNC('unit', 'YYYY-MM-DD' or 'YYYYMMDD')
+    sql = re.sub(
+        r"DATE_TRUNC\s*\(\s*['\"](\w+)['\"]\s*,\s*['\"]([^'\"]+)['\"]\s*\)",
+        replace_date_trunc,
+        sql,
+        flags=re.IGNORECASE
+    )
+    
     return sql
 
 def fix_date_functions_on_text_columns(sql: str) -> str:
@@ -277,19 +390,19 @@ def fix_date_functions_on_text_columns(sql: str) -> str:
     if not sql:
         return sql
     
-    # Common text date column patterns
+    # Common text date column patterns (specific to our schema only)
     text_date_columns = [
-        'sumr_ym', 'trsc_ym', 'ym', 'year_month', 'month_year',
-        'sumr_dt', 'trsc_dt', 'dt', 'date_text'
+        'sumr_ym', 'trsc_ym',  # YYYYMM format columns
+        'sumr_dt', 'trsc_dt'   # YYYYMMDD format columns
     ]
     
     for col in text_date_columns:
         # Pattern: TO_CHAR(text_column, format)
         # Replace with: TO_CHAR(TO_DATE(text_column, 'YYYYMM'), format)
-        # Detect if it's YYYYMM (6 chars) or YYYYMMDD (8 chars) based on common patterns
+        # Detect if it's YYYYMM or YYYYMMDD based on column suffix
         
         # For *_ym columns (year-month), use YYYYMM format
-        if col.endswith('_ym') or col in ['ym', 'year_month', 'month_year']:
+        if col.endswith('_ym'):
             sql = re.sub(
                 rf'\bTO_CHAR\s*\(\s*({col})\s*,\s*([^)]+)\)',
                 rf"TO_CHAR(TO_DATE(\1, 'YYYYMM'), \2)",
@@ -307,7 +420,7 @@ def fix_date_functions_on_text_columns(sql: str) -> str:
             )
         
         # For *_dt columns (date), use YYYYMMDD format
-        elif col.endswith('_dt') or col in ['dt', 'date_text']:
+        elif col.endswith('_dt'):
             sql = re.sub(
                 rf'\bTO_CHAR\s*\(\s*({col})\s*,\s*([^)]+)\)',
                 rf"TO_CHAR(TO_DATE(\1, 'YYYYMMDD'), \2)",
@@ -329,14 +442,19 @@ def add_date_type_casts(sql: str) -> str:
     Adds type casts for date comparisons to handle text columns.
     Converts patterns like: trsc_dt >= DATE_TRUNC(...)
     To: trsc_dt::DATE >= DATE_TRUNC(...)::DATE
+    
+    NOTE: This function is now deprecated in favor of fix_text_date_column_comparisons()
+    which properly handles text date columns with TO_DATE() conversion.
+    Keeping this for backward compatibility but skipping text date columns.
     """
     if not sql:
         return sql
     
-    # Common date column name patterns (add more as needed)
+    # SKIP text date columns - they should be handled by fix_text_date_column_comparisons()
+    # Only handle true date/timestamp columns if we have any
     date_columns = [
-        'trsc_dt', 'transaction_dt', 'date', 'created_at', 'updated_at',
-        'order_date', 'purchase_date', 'sale_date', 'dt', 'datetime'
+        # 'trsc_dt', 'sumr_dt'  # These are TEXT columns, not DATE columns!
+        # Removed - our schema only has text date columns
     ]
     
     # For each date column, add ::DATE cast when comparing with date functions
@@ -397,8 +515,8 @@ def fix_yyyymm_arithmetic(sql: str) -> str:
     if not sql:
         return sql
     
-    # Common YYYYMM column patterns
-    yyyymm_columns = ['trsc_ym', 'ym', 'year_month', 'month_year']
+    # Common YYYYMM column patterns (specific to our schema only)
+    yyyymm_columns = ['trsc_ym', 'sumr_ym']
     
     for col in yyyymm_columns:
         # Pattern: [alias.]column + N (add months)
@@ -467,6 +585,173 @@ def cleanup_double_casts(sql: str) -> str:
     
     return sql
 
+def safe_to_date(column: str, format_str: str) -> str:
+    """
+    Creates a safe TO_DATE conversion that handles invalid/corrupted data.
+    Uses CASE WHEN to validate format before conversion.
+    
+    Args:
+        column: Column name
+        format_str: Date format (YYYYMMDD or YYYYMM)
+    
+    Returns:
+        Safe TO_DATE expression
+    """
+    if format_str == 'YYYYMMDD':
+        # Validate: must be 8 digits
+        return f"CASE WHEN {column} ~ '^[0-9]{{8}}$' THEN TO_DATE({column}, 'YYYYMMDD') ELSE NULL END"
+    elif format_str == 'YYYYMM':
+        # Validate: must be 6 digits
+        return f"CASE WHEN {column} ~ '^[0-9]{{6}}$' THEN TO_DATE({column}, 'YYYYMM') ELSE NULL END"
+    else:
+        return f"TO_DATE({column}, '{format_str}')"
+
+def fix_text_date_column_comparisons(sql: str) -> str:
+    """
+    Fixes type mismatches when text date columns are compared with date functions.
+    Adds TO_DATE() conversion for text columns in BETWEEN, WHERE, and JOIN conditions.
+    Now includes data validation to handle corrupted/invalid date strings.
+    
+    Example:
+        trsc_dt BETWEEN DATE_TRUNC(...) AND CURRENT_DATE
+        becomes:
+        CASE WHEN trsc_dt ~ '^[0-9]{8}$' THEN TO_DATE(trsc_dt, 'YYYYMMDD') ELSE NULL END::DATE 
+        BETWEEN DATE_TRUNC(...)::DATE AND CURRENT_DATE::DATE
+    """
+    if not sql:
+        return sql
+    
+    # Text date columns mapping to their format (specific to our schema only)
+    text_date_patterns = {
+        'trsc_dt': 'YYYYMMDD',  # Transaction date (daily tables)
+        'sumr_dt': 'YYYYMMDD',  # Summary date (daily tables)
+        'trsc_ym': 'YYYYMM',    # Transaction year-month (monthly tables)
+        'sumr_ym': 'YYYYMM',    # Summary year-month (monthly tables)
+    }
+    
+    for column, format_str in text_date_patterns.items():
+        # First, handle any existing ::DATE casts on the column itself (remove them so we can add TO_DATE properly)
+        # Pattern: column::DATE (without TO_DATE wrapper) -> just column
+        sql = re.sub(
+            rf'\b({column})::DATE\b(?!\s*\()',  # Match column::DATE but not if followed by (
+            rf'\1',
+            sql,
+            flags=re.IGNORECASE
+        )
+        
+        # Pattern 1: column BETWEEN expression AND expression
+        # Match any BETWEEN clause for our date columns and check if expressions are date-related
+        # Use a simpler pattern that captures everything between BETWEEN and AND, then AND to end of clause
+        
+        def replace_between_for_column(sql_text):
+            # Find all BETWEEN clauses for this column
+            # Pattern: column BETWEEN <expr1> AND <expr2>
+            # We need to handle nested parentheses properly
+            pattern = rf'\b({column})\s+BETWEEN\s+(.+?)\s+AND\s+(.+?)(?=\s+(?:GROUP|ORDER|LIMIT|HAVING|WHERE|FROM|;|\))|\s*$)'
+            
+            def replace_match(match):
+                col = match.group(1)
+                start_expr = match.group(2).strip()
+                end_expr = match.group(3).strip()
+                
+                # Only convert if expressions contain date functions/keywords or DATE() function
+                combined_expr = start_expr + end_expr
+                is_date_expr = (
+                    any(keyword in combined_expr.upper() for keyword in ['DATE_TRUNC', 'CURRENT_DATE', 'NOW', 'INTERVAL', 'TIMESTAMP'])
+                    or re.search(r'\bDATE\s*\(', combined_expr, re.IGNORECASE)  # Matches DATE(...)
+                )
+                
+                if not is_date_expr:
+                    return match.group(0)  # Don't convert non-date expressions
+                
+                # Convert column to date with validation
+                col_converted = f"{safe_to_date(col, format_str)}::DATE"
+                
+                # Add ::DATE cast to expressions if they're date functions
+                if any(keyword in start_expr.upper() for keyword in ['DATE_TRUNC', 'CURRENT_DATE', 'NOW', 'INTERVAL']):
+                    # Handle nested parentheses by counting
+                    if start_expr.startswith('(') and start_expr.count('(') == start_expr.count(')'):
+                        start_expr = f"{start_expr}::DATE"
+                    elif not start_expr.startswith('('):
+                        start_expr = f"{start_expr}::DATE"
+                
+                if any(keyword in end_expr.upper() for keyword in ['DATE_TRUNC', 'CURRENT_DATE', 'NOW', 'INTERVAL']):
+                    # Handle nested parentheses by counting
+                    if end_expr.startswith('(') and end_expr.count('(') == end_expr.count(')'):
+                        end_expr = f"{end_expr}::DATE"
+                    elif not end_expr.startswith('('):
+                        end_expr = f"{end_expr}::DATE"
+                
+                return f"{col_converted} BETWEEN {start_expr} AND {end_expr}"
+            
+            return re.sub(pattern, replace_match, sql_text, flags=re.IGNORECASE)
+        
+        sql = replace_between_for_column(sql)
+        
+        # Pattern 2: column comparison date_func (>=, <=, >, <, =, !=, <>)
+        for operator in ['>=', '<=', '>', '<', '=', '!=', '<>']:
+            # Column on left: trsc_dt >= DATE(...) or DATE_TRUNC(...) or CURRENT_DATE
+            # More flexible pattern that handles parentheses better
+            pattern_left = rf'\b({column})\s*({re.escape(operator)})\s*(DATE\([^)]+\)|DATE_TRUNC\([^)]+\)|CURRENT_DATE|NOW\(\)|\([^)]+(?:\([^)]*\))*[^)]*\))'
+            
+            def replace_left_comparison(match):
+                col = match.group(1)
+                op = match.group(2)
+                expr = match.group(3).strip()
+                
+                # Only convert if expression contains date keywords or DATE() function
+                is_date_function = (
+                    any(keyword in expr.upper() for keyword in ['DATE_TRUNC', 'CURRENT_DATE', 'NOW', 'INTERVAL', 'TIMESTAMP'])
+                    or re.search(r'\bDATE\s*\(', expr, re.IGNORECASE)  # Matches DATE(...)
+                )
+                
+                if not is_date_function:
+                    return match.group(0)  # Don't convert non-date expressions
+                
+                col_converted = f"{safe_to_date(col, format_str)}::DATE"
+                
+                if any(keyword in expr.upper() for keyword in ['DATE_TRUNC', 'CURRENT_DATE', 'NOW', 'INTERVAL']):
+                    # Add ::DATE cast
+                    if expr.startswith('(') and expr.endswith(')'):
+                        expr = f"{expr}::DATE"
+                    else:
+                        expr = f"{expr}::DATE"
+                
+                return f"{col_converted} {op} {expr}"
+            
+            sql = re.sub(pattern_left, replace_left_comparison, sql, flags=re.IGNORECASE)
+            
+            # Column on right: DATE(...) >= trsc_dt or DATE_TRUNC(...) >= trsc_dt
+            pattern_right = rf'(DATE\([^)]+\)|DATE_TRUNC\([^)]+\)|CURRENT_DATE|NOW\(\)|\([^)]+(?:\([^)]*\))*[^)]*\))\s*({re.escape(operator)})\s*\b({column})\b'
+            
+            def replace_right_comparison(match):
+                expr = match.group(1).strip()
+                op = match.group(2)
+                col = match.group(3)
+                
+                # Only convert if expression contains date keywords or DATE() function
+                is_date_function = (
+                    any(keyword in expr.upper() for keyword in ['DATE_TRUNC', 'CURRENT_DATE', 'NOW', 'INTERVAL', 'TIMESTAMP'])
+                    or re.search(r'\bDATE\s*\(', expr, re.IGNORECASE)  # Matches DATE(...)
+                )
+                
+                if not is_date_function:
+                    return match.group(0)  # Don't convert non-date expressions
+                
+                col_converted = f"{safe_to_date(col, format_str)}::DATE"
+                
+                if any(keyword in expr.upper() for keyword in ['DATE_TRUNC', 'CURRENT_DATE', 'NOW', 'INTERVAL']):
+                    # Add ::DATE cast
+                    if expr.startswith('(') and expr.endswith(')'):
+                        expr = f"{expr}::DATE"
+                    else:
+                        expr = f"{expr}::DATE"
+                
+                return f"{expr} {op} {col_converted}"
+            
+            sql = re.sub(pattern_right, replace_right_comparison, sql, flags=re.IGNORECASE)
+    
+    return sql
 
 def fix_extract_type_mismatches(sql: str) -> str:
     """
