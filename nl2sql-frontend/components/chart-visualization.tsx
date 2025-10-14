@@ -38,6 +38,49 @@ export function ChartVisualization({ chartSpec }: ChartVisualizationProps) {
     ? Object.keys(data[0]).filter(key => key !== 'name')
     : [];
 
+  // Format large numbers for Y-axis display
+  const formatYAxisValue = (value: number) => {
+    if (value >= 1000000000) {
+      return `${(value / 1000000000).toFixed(1)}B`;
+    } else if (value >= 1000000) {
+      return `${(value / 1000000).toFixed(1)}M`;
+    } else if (value >= 1000) {
+      return `${(value / 1000).toFixed(1)}K`;
+    }
+    return value.toString();
+  };
+
+  // Get axis labels from config or generate from data
+  const getXAxisLabel = () => {
+    // Try to get from config first
+    if (config && Object.keys(config).length > 0) {
+      const firstKey = Object.keys(config)[0];
+      if (config[firstKey]?.label) {
+        // Extract the category name from the label (e.g., "Sales by Month" -> "Month")
+        const label = config[firstKey].label;
+        if (label.toLowerCase().includes('by')) {
+          return label.split(' by ')[1] || 'Category';
+        }
+        return 'Category';
+      }
+    }
+    return 'Category';
+  };
+
+  const getYAxisLabel = () => {
+    // Try to get from config first
+    if (config && valueKeys.length > 0) {
+      const firstValueKey = valueKeys[0];
+      if (config[firstValueKey]?.label) {
+        return config[firstValueKey].label;
+      }
+    }
+    // Fallback to formatted key name
+    return valueKeys.length > 0 
+      ? valueKeys[0].replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase())
+      : 'Value';
+  };
+
   // Determine chart type
   const chartTypeLower = chart_type.toLowerCase();
   
@@ -46,7 +89,7 @@ export function ChartVisualization({ chartSpec }: ChartVisualizationProps) {
     if (chartTypeLower.includes('bar')) {
       return (
         <ResponsiveContainer width="100%" height={400}>
-          <BarChart data={data} margin={{ top: 20, right: 30, left: 20, bottom: 60 }}>
+          <BarChart data={data} margin={{ top: 20, right: 30, left: 20, bottom: 80 }}>
             <CartesianGrid strokeDasharray="3 3" />
             <XAxis 
               dataKey="name" 
@@ -54,8 +97,12 @@ export function ChartVisualization({ chartSpec }: ChartVisualizationProps) {
               textAnchor="end" 
               height={100}
               interval={0}
+              label={{ value: getXAxisLabel(), position: 'insideBottom', offset: -10 }}
             />
-            <YAxis />
+            <YAxis 
+              tickFormatter={formatYAxisValue}
+              label={{ value: getYAxisLabel(), angle: -90, position: 'insideLeft' }}
+            />
             <Tooltip 
               formatter={(value: number | string) => {
                 if (typeof value === 'number') {
@@ -82,7 +129,7 @@ export function ChartVisualization({ chartSpec }: ChartVisualizationProps) {
     if (chartTypeLower.includes('line')) {
       return (
         <ResponsiveContainer width="100%" height={400}>
-          <LineChart data={data} margin={{ top: 20, right: 30, left: 20, bottom: 60 }}>
+          <LineChart data={data} margin={{ top: 20, right: 30, left: 20, bottom: 80 }}>
             <CartesianGrid strokeDasharray="3 3" />
             <XAxis 
               dataKey="name" 
@@ -90,8 +137,12 @@ export function ChartVisualization({ chartSpec }: ChartVisualizationProps) {
               textAnchor="end" 
               height={100}
               interval={0}
+              label={{ value: getXAxisLabel(), position: 'insideBottom', offset: -10 }}
             />
-            <YAxis />
+            <YAxis 
+              tickFormatter={formatYAxisValue}
+              label={{ value: getYAxisLabel(), angle: -90, position: 'insideLeft' }}
+            />
             <Tooltip 
               formatter={(value: number | string) => {
                 if (typeof value === 'number') {
@@ -162,7 +213,7 @@ export function ChartVisualization({ chartSpec }: ChartVisualizationProps) {
     if (chartTypeLower.includes('area')) {
       return (
         <ResponsiveContainer width="100%" height={400}>
-          <AreaChart data={data} margin={{ top: 20, right: 30, left: 20, bottom: 60 }}>
+          <AreaChart data={data} margin={{ top: 20, right: 30, left: 20, bottom: 80 }}>
             <CartesianGrid strokeDasharray="3 3" />
             <XAxis 
               dataKey="name" 
@@ -170,8 +221,12 @@ export function ChartVisualization({ chartSpec }: ChartVisualizationProps) {
               textAnchor="end" 
               height={100}
               interval={0}
+              label={{ value: getXAxisLabel(), position: 'insideBottom', offset: -10 }}
             />
-            <YAxis />
+            <YAxis 
+              tickFormatter={formatYAxisValue}
+              label={{ value: getYAxisLabel(), angle: -90, position: 'insideLeft' }}
+            />
             <Tooltip 
               formatter={(value: number | string) => {
                 if (typeof value === 'number') {
@@ -200,7 +255,7 @@ export function ChartVisualization({ chartSpec }: ChartVisualizationProps) {
     // Default to bar chart if type is unknown
     return (
       <ResponsiveContainer width="100%" height={400}>
-        <BarChart data={data} margin={{ top: 20, right: 30, left: 20, bottom: 60 }}>
+        <BarChart data={data} margin={{ top: 20, right: 30, left: 20, bottom: 80 }}>
           <CartesianGrid strokeDasharray="3 3" />
           <XAxis 
             dataKey="name" 
@@ -208,8 +263,12 @@ export function ChartVisualization({ chartSpec }: ChartVisualizationProps) {
             textAnchor="end" 
             height={100}
             interval={0}
+            label={{ value: getXAxisLabel(), position: 'insideBottom', offset: -10 }}
           />
-          <YAxis />
+          <YAxis 
+            tickFormatter={formatYAxisValue}
+            label={{ value: getYAxisLabel(), angle: -90, position: 'insideLeft' }}
+          />
           <Tooltip 
             formatter={(value: number | string) => {
               if (typeof value === 'number') {

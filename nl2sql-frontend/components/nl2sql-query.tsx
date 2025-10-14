@@ -18,7 +18,9 @@ import {
   CheckCircle2, 
   XCircle, 
   MessageSquare,
-  Loader2 
+  Loader2,
+  Eye,
+  EyeOff
 } from 'lucide-react';
 
 export function NL2SQLQuery() {
@@ -28,6 +30,7 @@ export function NL2SQLQuery() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [conversationCount, setConversationCount] = useState(0);
+  const [showSqlQuery, setShowSqlQuery] = useState(false);
 
   // Initialize session ID on mount
   useEffect(() => {
@@ -131,6 +134,24 @@ export function NL2SQLQuery() {
               <Button
                 variant="outline"
                 size="sm"
+                onClick={() => setShowSqlQuery(!showSqlQuery)}
+                disabled={loading}
+              >
+                {showSqlQuery ? (
+                  <>
+                    <EyeOff className="h-4 w-4 mr-2" />
+                    Hide SQL
+                  </>
+                ) : (
+                  <>
+                    <Eye className="h-4 w-4 mr-2" />
+                    Show SQL
+                  </>
+                )}
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
                 onClick={handleClearConversation}
                 disabled={loading || conversationCount === 0}
               >
@@ -221,8 +242,8 @@ export function NL2SQLQuery() {
             </Card>
           )}
 
-          {/* SQL Query */}
-          {response.sql_query && (
+          {/* SQL Query - Only show if toggle is enabled */}
+          {showSqlQuery && response.sql_query && (
             <Card>
               <CardHeader>
                 <CardTitle className="text-lg flex items-center gap-2">
