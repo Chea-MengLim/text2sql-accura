@@ -50,6 +50,33 @@ export function ChartVisualization({ chartSpec }: ChartVisualizationProps) {
     return value.toString();
   };
 
+  // Format tooltip values with proper currency/number formatting
+  const formatTooltipValue = (value: number | string, dataKey?: string) => {
+    if (typeof value === 'number') {
+      // Check if this is a currency field
+      const isCurrency = dataKey && (
+        dataKey.toLowerCase().includes('amt') || 
+        dataKey.toLowerCase().includes('amount') || 
+        dataKey.toLowerCase().includes('price') || 
+        dataKey.toLowerCase().includes('cost') ||
+        dataKey.toLowerCase().includes('value') || 
+        dataKey.toLowerCase().includes('total')
+      );
+      
+      if (isCurrency) {
+        return new Intl.NumberFormat('en-US', {
+          style: 'currency',
+          currency: 'USD',
+          minimumFractionDigits: 2,
+          maximumFractionDigits: 2
+        }).format(value);
+      } else {
+        return new Intl.NumberFormat('en-US').format(value);
+      }
+    }
+    return value;
+  };
+
   // Get axis labels from config or generate from data
   const getXAxisLabel = () => {
     // Try to get from config first
@@ -104,11 +131,8 @@ export function ChartVisualization({ chartSpec }: ChartVisualizationProps) {
               label={{ value: getYAxisLabel(), angle: -90, position: 'insideLeft' }}
             />
             <Tooltip 
-              formatter={(value: number | string) => {
-                if (typeof value === 'number') {
-                  return value.toLocaleString();
-                }
-                return value;
+              formatter={(value: number | string, name: string) => {
+                return [formatTooltipValue(value, name), name];
               }}
             />
             <Legend />
@@ -144,18 +168,15 @@ export function ChartVisualization({ chartSpec }: ChartVisualizationProps) {
               label={{ value: getYAxisLabel(), angle: -90, position: 'insideLeft' }}
             />
             <Tooltip 
-              formatter={(value: number | string) => {
-                if (typeof value === 'number') {
-                  return value.toLocaleString();
-                }
-                return value;
+              formatter={(value: number | string, name: string) => {
+                return [formatTooltipValue(value, name), name];
               }}
             />
             <Legend />
             {valueKeys.map((key, index) => (
               <Line 
-                key={key}
-                type="monotone"
+                key={key} 
+                type="monotone" 
                 dataKey={key} 
                 stroke={COLORS[index % COLORS.length]}
                 strokeWidth={2}
@@ -196,11 +217,8 @@ export function ChartVisualization({ chartSpec }: ChartVisualizationProps) {
               ))}
             </Pie>
             <Tooltip 
-              formatter={(value: number | string) => {
-                if (typeof value === 'number') {
-                  return value.toLocaleString();
-                }
-                return value;
+              formatter={(value: number | string, name: string) => {
+                return [formatTooltipValue(value, name), name];
               }}
             />
             <Legend />
@@ -228,11 +246,8 @@ export function ChartVisualization({ chartSpec }: ChartVisualizationProps) {
               label={{ value: getYAxisLabel(), angle: -90, position: 'insideLeft' }}
             />
             <Tooltip 
-              formatter={(value: number | string) => {
-                if (typeof value === 'number') {
-                  return value.toLocaleString();
-                }
-                return value;
+              formatter={(value: number | string, name: string) => {
+                return [formatTooltipValue(value, name), name];
               }}
             />
             <Legend />
@@ -270,11 +285,8 @@ export function ChartVisualization({ chartSpec }: ChartVisualizationProps) {
             label={{ value: getYAxisLabel(), angle: -90, position: 'insideLeft' }}
           />
           <Tooltip 
-            formatter={(value: number | string) => {
-              if (typeof value === 'number') {
-                return value.toLocaleString();
-              }
-              return value;
+            formatter={(value: number | string, name: string) => {
+              return [formatTooltipValue(value, name), name];
             }}
           />
           <Legend />

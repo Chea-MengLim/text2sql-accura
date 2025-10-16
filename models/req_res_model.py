@@ -16,6 +16,7 @@ class NL2SQLResponse(BaseModel):
     chart_specification: Optional[Dict[str, Any]] = None  # Add this field
     data: Optional[List[Dict[str, Any]]] = None  # Optionally add actual data
     query_result: Optional[List[Dict[str, Any]]] = None  # 👈 added this for backward compatibility
+    follow_up_questions: Optional[List[str]] = None  # Add follow-up questions field
 
 class DatabaseConnectionResponse(BaseModel):
     status: str

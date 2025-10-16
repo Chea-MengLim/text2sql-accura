@@ -211,6 +211,21 @@ async def query_bilingual(
                     logger.warning(f"Failed to translate fallback message to Korean: {e}")
             chart_spec = None
         
+        # Step 7.5: Generate follow-up questions
+        logger.info("Generating follow-up questions...")
+        follow_up_questions = await ai_assistant.generate_follow_up_questions(
+            user_question=explanation_context,
+            sql_query=sql_query,
+            result_data=execution_result["data"] if execution_result["success"] else [],
+            execution_success=execution_result["success"],
+            error_message=execution_result.get("error")
+        )
+        
+        if follow_up_questions:
+            logger.info(f"Generated {len(follow_up_questions)} follow-up questions")
+        else:
+            logger.info("No follow-up questions generated")
+        
         # Step 8: Save exchange to PostgreSQL memory
         # Store both original text and effective question for context
         memory_service.save_exchange(
@@ -230,7 +245,8 @@ async def query_bilingual(
                 error_message=None,
                 chart_specification=chart_spec,  # Chart data if available
                 data=execution_result.get("data"),  # Include query results
-                query_result=execution_result.get("data")  # Backward compatibility
+                query_result=execution_result.get("data"),  # Backward compatibility
+                follow_up_questions=follow_up_questions  # Include follow-up questions
             )
         else:
             # For error messages, translate to Korean if original input was Korean
@@ -249,7 +265,8 @@ async def query_bilingual(
                 error_message=execution_result.get("error"),
                 chart_specification=None,
                 data=[],
-                query_result=None
+                query_result=None,
+                follow_up_questions=follow_up_questions  # Include follow-up questions even for failed queries
             )
 
     except HTTPException:
@@ -296,13 +313,25 @@ async def convert_nl_to_sql(
                 "Please try rephrasing your question in a simpler way, or ask about a smaller time range. "
                 f"Technical details: {str(e)}"
             )
+            
+            # Generate follow-up questions for SQL extraction failure
+            logger.info("Generating follow-up questions for SQL extraction failure...")
+            follow_up_questions = await ai_assistant.generate_follow_up_questions(
+                user_question=request.question,
+                sql_query="",
+                result_data=[],
+                execution_success=False,
+                error_message=str(e)
+            )
+            
             return NL2SQLResponse(
                 sql_query="",
                 natural_language_answer=error_msg,
                 execution_success=False,
                 error_message=str(e),
                 chart_specification=None,
-                data=[]
+                data=[],
+                follow_up_questions=follow_up_questions
             )
 
         # Convert SQLite syntax to PostgreSQL
@@ -353,7 +382,22 @@ async def convert_nl_to_sql(
             nl_explanation = execution_result["summary"]
             chart_spec = None
         
-        # Step 7: Save exchange to PostgreSQL memory
+        # Step 7: Generate follow-up questions
+        logger.info("Generating follow-up questions...")
+        follow_up_questions = await ai_assistant.generate_follow_up_questions(
+            user_question=request.question,
+            sql_query=sql_query,
+            result_data=execution_result["data"] if execution_result["success"] else [],
+            execution_success=execution_result["success"],
+            error_message=execution_result.get("error")
+        )
+        
+        if follow_up_questions:
+            logger.info(f"Generated {len(follow_up_questions)} follow-up questions")
+        else:
+            logger.info("No follow-up questions generated")
+        
+        # Step 8: Save exchange to PostgreSQL memory
         memory_service.save_exchange(
             memory=memory,
             question=request.question,
@@ -361,7 +405,7 @@ async def convert_nl_to_sql(
         )
         logger.info(f"Exchange saved to session {session_id}")
 
-        # Step 8: Prepare response with AI-generated content
+        # Step 9: Prepare response with AI-generated content
         if execution_result["success"]:
             return NL2SQLResponse(
                 sql_query=sql_query,
@@ -369,7 +413,8 @@ async def convert_nl_to_sql(
                 execution_success=True,
                 error_message=None,
                 chart_specification=chart_spec,  # Chart data if available
-                data=execution_result["data"]  # Include query results
+                data=execution_result["data"],  # Include query results
+                follow_up_questions=follow_up_questions  # Include follow-up questions
             )
         else:
             return NL2SQLResponse(
@@ -378,7 +423,8 @@ async def convert_nl_to_sql(
                 execution_success=False,
                 error_message=execution_result["error"],
                 chart_specification=None,
-                data=[]
+                data=[],
+                follow_up_questions=follow_up_questions  # Include follow-up questions even for failed queries
             )
 
     except Exception as e:

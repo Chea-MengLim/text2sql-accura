@@ -29,6 +29,7 @@ export interface NL2SQLResponse {
   error_message?: string;
   chart_specification?: ChartSpecification;
   data?: Array<Record<string, unknown>>;
+  follow_up_questions?: string[];
 }
 
 export interface StatusResponse {
