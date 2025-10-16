@@ -45,16 +45,104 @@ export function DataTable({ data, title, description }: DataTableProps) {
   };
 
   // Format cell values
-  const formatCellValue = (value: unknown) => {
+  const formatCellValue = (value: unknown, columnName: string) => {
     if (value === null || value === undefined) {
       return '-';
     }
+    
+    // Handle numbers with proper formatting
     if (typeof value === 'number') {
-      return value.toLocaleString();
+      // For large numbers, add thousands separators and consider currency formatting
+      const columnLower = columnName.toLowerCase();
+      const isCurrency = columnLower.includes('amt') || columnLower.includes('amount') || 
+                        columnLower.includes('price') || columnLower.includes('cost') ||
+                        columnLower.includes('value') || columnLower.includes('total');
+      
+      if (isCurrency) {
+        // Format as currency with 2 decimal places
+        return new Intl.NumberFormat('en-US', {
+          style: 'currency',
+          currency: 'USD',
+          minimumFractionDigits: 2,
+          maximumFractionDigits: 2
+        }).format(value);
+      } else {
+        // Format as number with thousands separators
+        return new Intl.NumberFormat('en-US').format(value);
+      }
     }
+    
+    // Handle date strings (YYYYMMDD format)
+    if (typeof value === 'string') {
+      const strValue = String(value).trim();
+      
+      // Check if it's a date in YYYYMMDD format (8 digits)
+      if (/^\d{8}$/.test(strValue)) {
+        try {
+          const year = strValue.substring(0, 4);
+          const month = strValue.substring(4, 6);
+          const day = strValue.substring(6, 8);
+          const date = new Date(parseInt(year), parseInt(month) - 1, parseInt(day));
+          
+          // Format as readable date
+          return date.toLocaleDateString('en-US', {
+            year: 'numeric',
+            month: 'short',
+            day: 'numeric'
+          });
+        } catch (e) {
+          // If date parsing fails, return original string
+          return strValue;
+        }
+      }
+      
+      // Check if it's a date in YYYYMM format (6 digits)
+      if (/^\d{6}$/.test(strValue)) {
+        try {
+          const year = strValue.substring(0, 4);
+          const month = strValue.substring(4, 6);
+          const date = new Date(parseInt(year), parseInt(month) - 1, 1);
+          
+          // Format as readable month/year
+          return date.toLocaleDateString('en-US', {
+            year: 'numeric',
+            month: 'short'
+          });
+        } catch (e) {
+          // If date parsing fails, return original string
+          return strValue;
+        }
+      }
+      
+      // Check if it's a number string (for cases where numbers come as strings)
+      if (/^\d+\.?\d*$/.test(strValue)) {
+        const numValue = parseFloat(strValue);
+        if (!isNaN(numValue)) {
+          const columnLower = columnName.toLowerCase();
+          const isCurrency = columnLower.includes('amt') || columnLower.includes('amount') || 
+                            columnLower.includes('price') || columnLower.includes('cost') ||
+                            columnLower.includes('value') || columnLower.includes('total');
+          
+          if (isCurrency) {
+            return new Intl.NumberFormat('en-US', {
+              style: 'currency',
+              currency: 'USD',
+              minimumFractionDigits: 2,
+              maximumFractionDigits: 2
+            }).format(numValue);
+          } else {
+            return new Intl.NumberFormat('en-US').format(numValue);
+          }
+        }
+      }
+      
+      return strValue;
+    }
+    
     if (typeof value === 'boolean') {
       return value ? 'Yes' : 'No';
     }
+    
     return String(value);
   };
 
@@ -83,7 +171,7 @@ export function DataTable({ data, title, description }: DataTableProps) {
                 <TableRow key={rowIndex}>
                   {columns.map((column) => (
                     <TableCell key={`${rowIndex}-${column}`}>
-                      {formatCellValue(row[column])}
+                      {formatCellValue(row[column], column)}
                     </TableCell>
                   ))}
                 </TableRow>

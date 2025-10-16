@@ -10,6 +10,7 @@ import { Badge } from '@/components/ui/badge';
 import { Skeleton } from '@/components/ui/skeleton';
 import { ChartVisualization } from '@/components/chart-visualization';
 import { DataTable } from '@/components/data-table';
+import { FollowUpQuestions } from '@/components/follow-up-questions';
 import nl2sqlApi, { NL2SQLResponse } from '@/lib/api';
 import { 
   Send, 
@@ -100,6 +101,36 @@ export function NL2SQLQuery() {
     } catch (err: unknown) {
       console.error('Failed to clear conversation:', err);
       setError('Failed to clear conversation history');
+    }
+  };
+
+  const handleFollowUpClick = async (question: string) => {
+    // Set the question in the input field and submit it
+    setQuestion(question);
+    
+    // Submit the follow-up question
+    setLoading(true);
+    setError(null);
+    
+    try {
+      const result = await nl2sqlApi.query({
+        question: question.trim(),
+        session_id: sessionId,
+      });
+      
+      setResponse(result);
+      setQuestion(''); // Clear input after successful query
+      
+      // Update conversation count
+      if (sessionId) {
+        await loadConversationCount(sessionId);
+      }
+    } catch (err: unknown) {
+      console.error('Follow-up query failed:', err);
+      const error = err as { response?: { data?: { detail?: string } }; message?: string };
+      setError(error.response?.data?.detail || error.message || 'Failed to process follow-up query');
+    } finally {
+      setLoading(false);
     }
   };
 
@@ -270,6 +301,14 @@ export function NL2SQLQuery() {
               data={response.data!} 
               title="Query Results"
               description={`${response.data!.length} ${response.data!.length === 1 ? 'row' : 'rows'} returned`}
+            />
+          )}
+
+          {/* Follow-up Questions */}
+          {response.follow_up_questions && response.follow_up_questions.length > 0 && (
+            <FollowUpQuestions 
+              questions={response.follow_up_questions}
+              onQuestionClick={handleFollowUpClick}
             />
           )}
 
