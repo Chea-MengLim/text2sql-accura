@@ -55,10 +55,43 @@ class AIAssistant:
                 return "No results were found for your query."
             
             row_count = len(result_data)
-            sample_results = result_data[:3] if row_count > 3 else result_data
-            results_str = json.dumps(sample_results, indent=2, default=str)
             
-            prompt = f"""You are a helpful database assistant. Explain this query result clearly and concisely.
+            # For large datasets, use statistical summary instead of raw data
+            if row_count > 50:
+                summary = self._generate_statistical_summary(result_data)
+                sample_results = result_data[:5]  # Just a small sample for context
+                
+                prompt = f"""You are a helpful database assistant. Explain this query result clearly and concisely.
+
+User's Question: {user_question}
+
+SQL Query:
+{sql_query}
+
+DATASET SUMMARY:
+- Total Records: {summary['total_records']}
+- Columns: {', '.join(summary['columns'])}
+
+STATISTICAL INSIGHTS:
+{json.dumps(summary['statistics'], indent=2, default=str)}
+
+SAMPLE DATA (first 5 of {row_count} records):
+{json.dumps(sample_results, indent=2, default=str)}
+
+Provide a clear explanation that:
+1. Directly answers the user's question
+2. Highlights key statistical insights from the data
+3. Mentions important numbers, trends, or patterns
+4. Keep it concise (2-3 sentences)
+5. Focus on the statistical summary rather than individual records
+
+Explanation:"""
+            else:
+                # For smaller datasets, use existing approach
+                sample_results = result_data[:3] if row_count > 3 else result_data
+                results_str = json.dumps(sample_results, indent=2, default=str)
+                
+                prompt = f"""You are a helpful database assistant. Explain this query result clearly and concisely.
 
 User's Question: {user_question}
 
@@ -94,6 +127,104 @@ Explanation:"""
             logger.error(f"Failed to generate explanation: {str(e)}")
             return f"Found {len(result_data)} record(s) matching your criteria."
     
+    def _generate_statistical_summary(self, result_data: List[Dict[str, Any]]) -> Dict[str, Any]:
+        """Generate statistical summary of large datasets"""
+        if not result_data:
+            return {}
+        
+        summary = {
+            "total_records": len(result_data),
+            "sample_size": min(10, len(result_data)),
+            "columns": list(result_data[0].keys()) if result_data else [],
+            "statistics": {}
+        }
+        
+        # Generate statistics for numeric columns
+        for col in summary["columns"]:
+            values = [row.get(col) for row in result_data if row.get(col) is not None]
+            if values:
+                try:
+                    # More robust numeric detection
+                    numeric_values = []
+                    for v in values:
+                        try:
+                            # Try to convert to float
+                            float_val = float(v)
+                            numeric_values.append(float_val)
+                        except (ValueError, TypeError):
+                            # Check if it's a string that looks like a number
+                            str_v = str(v).strip()
+                            if str_v.replace('.', '').replace('-', '').replace('+', '').isdigit():
+                                numeric_values.append(float(str_v))
+                    
+                    if numeric_values:
+                        summary["statistics"][col] = {
+                            "min": min(numeric_values),
+                            "max": max(numeric_values),
+                            "avg": sum(numeric_values) / len(numeric_values),
+                            "sum": sum(numeric_values),
+                            "count": len(numeric_values)
+                        }
+                except:
+                    # Non-numeric column
+                    unique_values = list(set(str(v) for v in values))
+                    summary["statistics"][col] = {
+                        "unique_count": len(unique_values),
+                        "top_values": unique_values[:5]  # Top 5 unique values
+                    }
+        
+        return summary
+
+    def _smart_sample_for_chart(self, sql_result: List[Dict[str, Any]], max_samples: int = 50) -> List[Dict[str, Any]]:
+        """Intelligently sample data for chart generation"""
+        if len(sql_result) <= max_samples:
+            return sql_result
+        
+        # For time series data, try to preserve temporal distribution
+        first_row = sql_result[0]
+        keys = list(first_row.keys())
+        
+        # Check if we have a time-related column
+        time_column = None
+        for key in keys:
+            if any(word in key.lower() for word in ['date', 'time', 'year', 'month', 'day']):
+                time_column = key
+                break
+        
+        if time_column:
+            # For time series, sample evenly across the time range
+            step = len(sql_result) // max_samples
+            sampled = [sql_result[i] for i in range(0, len(sql_result), step)][:max_samples]
+            
+            # Always include first and last records
+            if sampled[0] != sql_result[0]:
+                sampled.insert(0, sql_result[0])
+            if sampled[-1] != sql_result[-1]:
+                sampled.append(sql_result[-1])
+            
+            return sampled[:max_samples]
+        else:
+            # For non-time series, use random sampling with statistical representation
+            import random
+            # Ensure we get a good mix: first few, last few, and random middle
+            sample_size = max_samples
+            first_n = min(5, sample_size // 3)
+            last_n = min(5, sample_size // 3)
+            middle_n = sample_size - first_n - last_n
+            
+            sampled = []
+            sampled.extend(sql_result[:first_n])
+            sampled.extend(sql_result[-last_n:])
+            
+            if middle_n > 0 and len(sql_result) > first_n + last_n:
+                middle_start = first_n
+                middle_end = len(sql_result) - last_n
+                middle_indices = random.sample(range(middle_start, middle_end), 
+                                             min(middle_n, middle_end - middle_start))
+                sampled.extend([sql_result[i] for i in sorted(middle_indices)])
+            
+            return sampled[:max_samples]
+
     def _is_data_suitable_for_chart(self, sql_result: List[Dict[str, Any]], user_question: str) -> bool:
         """Pre-analyze if data is suitable for charting without calling AI"""
         if not sql_result or len(sql_result) == 0:
@@ -142,8 +273,16 @@ Explanation:"""
                 logger.info("Data pre-analysis: not suitable for charting")
                 return None
             
-            result_str = json.dumps(sql_result[:20], default=str, indent=2)
-            prompt = self._build_chart_prompt(user_question, sql_query, result_str)
+            # Smart sampling for large datasets
+            if len(sql_result) > 50:
+                sampled_data = self._smart_sample_for_chart(sql_result, max_samples=50)
+                summary_info = f" (sampled from {len(sql_result)} total records)"
+            else:
+                sampled_data = sql_result
+                summary_info = ""
+            
+            result_str = json.dumps(sampled_data, default=str, indent=2)
+            prompt = self._build_chart_prompt(user_question, sql_query, result_str, summary_info)
             
             answer = await self._ollama_generate(
                 prompt=prompt,
@@ -187,7 +326,7 @@ Explanation:"""
             logger.error(f"Chart generation failed: {str(e)}")
             return None
     
-    def _build_chart_prompt(self, question: str, query: str, response: str) -> str:
+    def _build_chart_prompt(self, question: str, query: str, response: str, summary_info: str = "") -> str:
         """Build chart generation prompt for shadcn/Recharts format"""
         return f"""You are a data visualization assistant. Generate chart specifications for suitable data.
 
@@ -197,31 +336,40 @@ User Input:
 SQL Query:
 {query}
 
-SQL Result:
+SQL Result{summary_info}:
 {response}
+
+IMPORTANT: This data may be sampled from a larger dataset. Focus on the patterns and trends visible in the provided data.
 
 DECISION LOGIC:
 - If data has 2+ rows with meaningful categories/values → GENERATE CHART
 - If data is single count/aggregate → RESPOND "no"
 - If user explicitly asks for chart → GENERATE CHART (if data allows)
 
+CHART TYPE SELECTION RULES:
+- Time series data (dates, years, months) with 5+ data points → LINE CHART
+- Time series data with <5 data points → BAR CHART
+- Categorical data (names, types, categories) → BAR CHART
+- Proportions/percentages → PIE CHART
+- Cumulative trends over time → AREA CHART
+
 YOUR DATA ANALYSIS:
 - Number of rows: Multiple rows detected
-- Data type: Time series data (years)
-- Suitable for chart: YES - This is perfect for a bar chart
+- Data type: Analyze the data structure to determine if it's time series or categorical
+- Chart type: Choose appropriate chart type based on data pattern
 
 RESPONSE FORMAT:
 If suitable, generate JSON:
 {{
-    "chart_type": "bar chart",
+    "chart_type": "line chart",  // or "bar chart", "pie chart", "area chart"
     "data": [
-        {{"name": "2023", "total_profit_in_krw": 52065005448.76}},
-        {{"name": "2024", "total_profit_in_krw": 58483971661.00}}
+        {{"name": "Jan 01, 2025", "total_sale_amt": 10154732}},
+        {{"name": "Jan 02, 2025", "total_sale_amt": 47969005}}
     ],
     "config": {{
-        "total_profit_in_krw": {{"label": "Total Profit (KRW)"}}
+        "total_sale_amt": {{"label": "Total Sale Amount"}}
     }},
-    "explain": "Profit comparison by year"
+    "explain": "Daily total sale amount by date"
 }}
 
 If NOT suitable, respond: "no"
@@ -230,6 +378,7 @@ NAMING RULES:
 - Use actual field values in "name" (years, categories, etc.)
 - Keep numeric values as numbers (not strings)
 - Use meaningful field names for values
+- Format dates in human-readable format (e.g., "Jan 01, 2025" instead of "20250101")
 
 Generate chart specification:"""
     
@@ -364,8 +513,11 @@ Generate chart specification:"""
                     except ValueError:
                         continue
                 
+                # Format date strings if they look like dates
+                formatted_name = self._format_date_string(name_value)
+                
                 chart_data.append({
-                    "name": name_value,
+                    "name": formatted_name,
                     value_field: value_value
                 })
             
@@ -374,8 +526,35 @@ Generate chart specification:"""
             
             # Determine chart type based on data
             chart_type = "bar chart"
-            if 'year' in name_field.lower() or 'month' in name_field.lower() or 'date' in name_field.lower():
+            
+            # Check if this is time series data
+            is_time_series = False
+            name_field_lower = name_field.lower()
+            
+            # Check for time-related field names
+            time_keywords = ['year', 'month', 'date', 'day', 'time', 'period', 'quarter', 'week']
+            if any(keyword in name_field_lower for keyword in time_keywords):
+                is_time_series = True
+            
+            # Check if the data values look like dates (YYYYMMDD, YYYY-MM-DD, etc.)
+            if not is_time_series and chart_data:
+                sample_name = str(chart_data[0].get('name', ''))
+                # Check for date patterns
+                import re
+                date_patterns = [
+                    r'^\d{{8}}$',  # YYYYMMDD
+                    r'^\d{{4}}-\d{{2}}-\d{{2}}$',  # YYYY-MM-DD
+                    r'^\d{{4}}\d{{2}}$',  # YYYYMM
+                    r'^\d{{4}}$'  # YYYY
+                ]
+                if any(re.match(pattern, sample_name) for pattern in date_patterns):
+                    is_time_series = True
+            
+            # Choose chart type based on time series detection and data points
+            if is_time_series:
                 chart_type = "line chart" if len(chart_data) > 5 else "bar chart"
+            else:
+                chart_type = "bar chart"
             
             # Generate config
             config = {value_field: {"label": value_field.replace('_', ' ').title()}}
